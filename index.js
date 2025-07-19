@@ -5,6 +5,7 @@ const admin = require("firebase-admin");
 
 require("dotenv").config();
 
+const stripe = require('stripe')(`${process.env.StripePass}`);
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -14,7 +15,9 @@ app.use(cors());
 app.use(express.json());
 
 // firebase service
-const serviceAccount = require("./firebase-admin-key.json");
+const decodedKey = Buffer.from(process.env.FB_Service, 'base64').toString('utf8');
+// const serviceAccount = require("./firebase-admin-key.json");
+const serviceAccount = JSON.parse(decodedKey);
 
 admin.initializeApp({
     credential: admin.credential.cert(serviceAccount)
@@ -32,7 +35,7 @@ const client = new MongoClient(uri, {
 
 async function run() {
     try {
-        await client.connect();
+        // await client.connect();
 
         const usersCollection = client.db("teachflow").collection("users");
         const teacherCollection = client.db("teachflow").collection("teachers");
@@ -174,6 +177,13 @@ async function run() {
             res.send(result);
         });
 
+        // For classId field
+        app.get('/classes/by-classId/:classId', async (req, res) => {
+            const id = req.params.classId;
+            const result = await classesCollection.findOne({ classId: id });
+            res.send(result);
+        });
+
         // GET all classes for admin review
         app.get('/classes', verifyFirebaseToken, verifyAdmin, async (req, res) => {
             const result = await classesCollection.find().toArray();
@@ -204,7 +214,6 @@ async function run() {
             }
         });
 
-
         // get payments
         app.get('/payments', verifyFirebaseToken, async (req, res) => {
             try {
@@ -223,6 +232,17 @@ async function run() {
                 console.error("Error fetching payment history: ", error);
                 res.status(500).send({ message: 'Failed to get payment' })
             }
+        });
+
+        // get enrolled classes
+        app.get('/enrollments', async (req, res) => {
+            const email = req.query.email;
+            if (!email) return res.status(400).send({ message: 'Missing email' });
+
+            const enrollments = await enrollmentsCollection.find({ studentEmail: email }).toArray();
+
+            // Optionally populate class info from classCollection if needed
+            res.send(enrollments);
         });
 
         // collection user info
@@ -306,35 +326,73 @@ async function run() {
         // record post for payment and update parcel status
         app.post('/payments', async (req, res) => {
             try {
-                const { classId, email, amount, paymentMethod, transactionId } = req.body;
+                const { classId, email, amount, paymentMethod, transactionId, userName } = req.body;
 
                 if (!classId || !email || !amount) {
-                    return res.status(400).send({ message: 'classId,email amount are missing!' })
+                    return res.status(400).send({ message: 'Required fields missing: classId, email, amount, userId' });
                 }
 
-                // update parcel status
-                const updateResult = await parcelCollection.updateOne(
-                    { _id: new ObjectId(classId) },
-                    { $set: { paymentStatus: 'paid' } },
-                );
-
-                if (updateResult.modifiedCount === 0) {
-                    res.status(404).send({ message: 'Parcel not found or already paid' })
-                }
-
-                const paymentDoc = {
-                    parcelId, email, amount, paymentMethod, transactionId, paidAt: new Date(), paidAtString: new Date().toISOString(),
+                const paymentData = {
+                    classId,
+                    email,
+                    amount,
+                    paymentMethod,
+                    transactionId,
+                    paidAt: new Date(),
+                    paidAtString: new Date().toISOString(),
                 };
 
-                const paymentResult = await paymentCollection.insertOne(paymentDoc);
+                const paymentResult = await paymentCollection.insertOne(paymentData);
+
+                // Create enrollment after payment
+                const enrollmentData = {
+                    studentEmail: email,
+                    classId,
+                    enrolledAt: new Date(),
+                    paymentInfo: {
+                        transactionId,
+                        method: paymentMethod,
+                        amount,
+                        paidAt: new Date(),
+                    },
+                    review: null, // will be added later
+                };
+
+                const enrollmentResult = await enrollmentsCollection.insertOne(enrollmentData);
 
                 res.status(200).send({
-                    message: 'Payment recorded and parcel marked as paid',
-                    insertedId: paymentResult.insertedId,
+                    message: 'Payment & enrollment successful',
+                    paymentId: paymentResult.insertedId,
+                    enrollmentId: enrollmentResult.insertedId,
                 });
             } catch (error) {
-                console.error('Payment processing failed: ', error);
-                res.status(500).send({ message: 'Failed to record payment' });
+                console.error('❌ Payment processing failed:', error);
+                res.status(500).send({ message: 'Failed to record payment/enrollment' });
+            }
+        });
+
+        // change role to student
+        app.patch('/users/role/self', verifyFirebaseToken, async (req, res) => {
+            const { role, email } = req.body;
+
+            // if (!["student"].includes(role)) {
+            //     return res.status(400).send({ message: 'Invalid role' });
+            // }
+
+            try {
+                const result = await usersCollection.updateOne(
+                    { email },
+                    { $set: { role } }
+                );
+
+                if (result.modifiedCount === 0) {
+                    return res.status(404).send({ message: 'User not found or role unchanged' });
+                }
+
+                res.send({ message: 'Role updated to student', modifiedCount: result.modifiedCount });
+            } catch (error) {
+                console.error(error);
+                res.status(500).send({ message: 'Role update failed' });
             }
         });
 
@@ -443,8 +501,8 @@ async function run() {
             res.send(result);
         });
 
-        await client.db("admin").command({ ping: 1 })
-        console.log("Pinned the deployment.Mongo and server connected!")
+        // await client.db("admin").command({ ping: 1 })
+        // console.log("Pinned the deployment.Mongo and server connected!")
     } finally {
         // await client.close();
     }
