@@ -42,6 +42,7 @@ async function run() {
         const classesCollection = client.db("teachflow").collection("classes");
         const paymentCollection = client.db("teachflow").collection("payments");
         const enrollmentsCollection = client.db("teachflow").collection("enrollments");
+        const feedbackCollection = client.db("teachflow").collection("feedback");
 
         // custom middlewares
         // for checking token
@@ -82,6 +83,25 @@ async function run() {
                 next();
             } catch (err) {
                 console.error('Admin check failed:', err);
+                res.status(500).json({ message: 'Server error during role verification' });
+            }
+        };
+        // for checking teacher
+        const verifyTeacher = async (req, res, next) => {
+            const userEmail = req.decoded?.email;
+            if (!userEmail) {
+                return res.status(403).json({ message: 'Forbidden: No email in token' });
+            }
+            try {
+                const user = await usersCollection.findOne({ email: userEmail });
+
+                if (!user || user.role !== 'teacher') {
+                    return res.status(403).json({ message: 'Forbidden: teacher only' });
+                }
+                // Passed all checks
+                next();
+            } catch (err) {
+                console.error('teacher check failed:', err);
                 res.status(500).json({ message: 'Server error during role verification' });
             }
         };
@@ -164,7 +184,7 @@ async function run() {
         });
 
         // Get all classes by teacher email
-        app.get('/classes/teacher', verifyFirebaseToken, async (req, res) => {
+        app.get('/classes/teacher', verifyFirebaseToken, verifyTeacher, async (req, res) => {
             const email = req.query.email;
             const result = await classesCollection.find({ teacherEmail: email }).toArray();
             res.send(result);
@@ -178,7 +198,7 @@ async function run() {
         });
 
         // For classId field
-        app.get('/classes/by-classId/:classId', async (req, res) => {
+        app.get('/classes/by-classId/:classId', verifyFirebaseToken, async (req, res) => {
             const id = req.params.classId;
             const result = await classesCollection.findOne({ classId: id });
             res.send(result);
@@ -190,26 +210,76 @@ async function run() {
             res.send(result);
         });
 
-        // 📌 Get all approved classes
+        // ✅ Get all approved classes with totalEnrollment count
         app.get('/approved-classes', async (req, res) => {
             try {
-                const result = await classesCollection.find({ status: 'approved' }).toArray();
+                const result = await classesCollection.aggregate([
+                    {
+                        $match: { status: 'approved' }
+                    },
+                    {
+                        $lookup: {
+                            from: 'enrollments', // ✅ matches your actual collection name
+                            localField: 'classId',
+                            foreignField: 'classId',
+                            as: 'enrollments'
+                        }
+                    },
+                    {
+                        $addFields: {
+                            totalEnrollment: { $size: '$enrollments' } // ✅ counts total enrollments
+                        }
+                    },
+                    {
+                        $project: {
+                            enrollments: 0 // ❌ hides raw enrollments array (optional)
+                        }
+                    }
+                ]).toArray();
+
                 res.send(result);
             } catch (err) {
-                res.status(500).send({ message: 'Failed to fetch approved classes', error: err });
+                console.error(err);
+                res.status(500).send({ message: 'Failed to fetch approved classes', error: err.message });
             }
         });
 
-        // 📌 Get popular classes
+        // get popular classes
         app.get('/popular-classes', async (req, res) => {
             try {
-                const result = await classesCollection
-                    .find({ status: 'approved' })
-                    .sort({ enrolledCount: -1 }) // Assuming you store enrollment count
-                    .limit(6)
-                    .toArray();
+                const result = await classesCollection.aggregate([
+                    {
+                        $match: { status: 'approved' }
+                    },
+                    {
+                        $lookup: {
+                            from: 'enrollments',
+                            localField: 'classId',
+                            foreignField: 'classId',
+                            as: 'enrollments'
+                        }
+                    },
+                    {
+                        $addFields: {
+                            enrolledCount: { $size: '$enrollments' }
+                        }
+                    },
+                    {
+                        $sort: { enrolledCount: -1 }
+                    },
+                    {
+                        $limit: 6
+                    },
+                    {
+                        $project: {
+                            enrollments: 0 // Optional: remove raw enrollments array
+                        }
+                    }
+                ]).toArray();
+
                 res.send(result);
             } catch (err) {
+                console.error(err);
                 res.status(500).send({ message: 'Failed to fetch popular classes' });
             }
         });
@@ -235,7 +305,7 @@ async function run() {
         });
 
         // get enrolled classes
-        app.get('/enrollments', async (req, res) => {
+        app.get('/enrollments', verifyFirebaseToken, async (req, res) => {
             const email = req.query.email;
             if (!email) return res.status(400).send({ message: 'Missing email' });
 
@@ -243,6 +313,29 @@ async function run() {
 
             // Optionally populate class info from classCollection if needed
             res.send(enrollments);
+        });
+
+        // Get total enrollments for a specific class
+        app.get('/enrollments/count/:classId', verifyFirebaseToken, verifyTeacher, async (req, res) => {
+            const { classId } = req.params;
+            try {
+                const count = await enrollmentsCollection.countDocuments({ classId });
+                res.json({ totalEnrollment: count });
+            } catch (error) {
+                console.error('Error counting enrollments:', error);
+                res.status(500).json({ error: 'Internal server error' });
+            }
+        });
+
+        // Get all feedback (for admin)
+        app.get('/feedback', async (req, res) => {
+            try {
+                const feedbacks = await feedbackCollection.find().toArray();
+                res.json(feedbacks);
+            } catch (error) {
+                console.error('Error fetching feedback:', error);
+                res.status(500).json({ error: 'Internal server error' });
+            }
         });
 
         // collection user info
@@ -295,7 +388,7 @@ async function run() {
         });
 
         // post submit class request
-        app.post('/classes', verifyFirebaseToken, async (req, res) => {
+        app.post('/classes', verifyFirebaseToken, verifyTeacher, async (req, res) => {
             const classData = req.body;
 
             if (!classData || !classData.teacherEmail) {
@@ -323,8 +416,8 @@ async function run() {
             }
         });
 
-        // record post for payment and update parcel status
-        app.post('/payments', async (req, res) => {
+        // record post for payment and update class status
+        app.post('/payments', verifyFirebaseToken, async (req, res) => {
             try {
                 const { classId, email, amount, paymentMethod, transactionId, userName } = req.body;
 
@@ -371,6 +464,92 @@ async function run() {
             }
         });
 
+        // Submit feedback
+        app.post('/feedback', verifyFirebaseToken, async (req, res) => {
+            try {
+                const { classId, title, student, image, rating, comment } = req.body;
+
+                if (!classId || !title || !student || rating == null || !comment) {
+                    return res.status(400).json({ error: 'All fields are required' });
+                };
+
+                // Check if student already submitted feedback for this class
+                const existingFeedback = await feedbackCollection.findOne({
+                    classId: classId,
+                    'student': student // Assuming student has an email field
+                });
+
+                if (existingFeedback) {
+                    return res.status(409).json({
+                        error: 'You have already submitted feedback for this class'
+                    });
+                };
+
+                const newFeedback = {
+                    classId,
+                    className: title,
+                    student,
+                    image,
+                    rating: Number(rating),
+                    comment,
+                    createdAt: new Date(),
+                };
+
+                const result = await feedbackCollection.insertOne(newFeedback);
+
+                res.status(201).json({
+                    message: 'Feedback submitted successfully',
+                    feedbackId: result.insertedId
+                });
+            } catch (error) {
+                console.error('Error submitting feedback:', error);
+                res.status(500).json({ error: 'Internal server error' });
+            }
+        });
+
+        // submit assignment
+        app.post('/assignments/submit', verifyFirebaseToken, async (req, res) => {
+            try {
+                const {
+                    classId,
+                    assignmentIndex,
+                    studentEmail,
+                    studentName,
+                    submissionText
+                } = req.body;
+
+                const classObjectId = classId;
+                const assignmentPath = `assignments.${assignmentIndex}`;
+
+                const updateResult = await classesCollection.updateOne(
+                    { classId: classObjectId }, // Correct usage
+                    {
+                        $push: {
+                            [`${assignmentPath}.submissions`]: {
+                                studentEmail,
+                                studentName,
+                                submissionText,
+                                submittedAt: new Date()
+                            }
+                        },
+                        $inc: {
+                            [`${assignmentPath}.submissionCount`]: 1,
+                            totalSubmissions: 1
+                        }
+                    }
+                );
+
+                if (updateResult.modifiedCount === 0) {
+                    return res.status(404).json({ error: 'Assignment not found' });
+                }
+
+                res.json({ success: true });
+            } catch (error) {
+                console.error('Error submitting assignment:', error);
+                res.status(500).json({ error: 'Internal server error' });
+            }
+        });
+
         // change role to student
         app.patch('/users/role/self', verifyFirebaseToken, async (req, res) => {
             const { role, email } = req.body;
@@ -407,7 +586,7 @@ async function run() {
         });
 
         // PATCH: Admin approves/rejects request & update user role
-        app.patch('/update-status/:id', async (req, res) => {
+        app.patch('/update-status/:id', verifyFirebaseToken, verifyAdmin, async (req, res) => {
             const id = req.params.id;
             const { status } = req.body;
 
@@ -465,6 +644,19 @@ async function run() {
             }
         });
 
+        // PATCH to update class details (e.g., title, price)
+        app.patch('/update-class/:id', verifyFirebaseToken, verifyTeacher, async (req, res) => {
+            const id = req.params.id;
+            const updatedData = req.body;
+
+            const result = await classesCollection.updateOne(
+                { _id: new ObjectId(id) },
+                { $set: updatedData }
+            );
+
+            res.send(result);
+        });
+
         // PATCH: Update class status
         app.patch('/classes/update-status/:id', verifyFirebaseToken, verifyAdmin, async (req, res) => {
             const id = req.params.id;
@@ -478,7 +670,7 @@ async function run() {
         });
 
         // Patch Add assignment inside class (embedded)
-        app.patch('/classes/add-assignment/:id', async (req, res) => {
+        app.patch('/classes/add-assignment/:id', verifyFirebaseToken, verifyTeacher, async (req, res) => {
             const classId = req.params.id;
             const assignment = req.body;
             assignment.createdAt = new Date();
@@ -494,8 +686,27 @@ async function run() {
             }
         });
 
+        // PATCH /enrollments/:classId/feedback
+        app.patch('/enrollments/:classId/feedback', async (req, res) => {
+            const classId = req.params.classId;
+            const userEmail = req.user.email;
+            const feedback = req.body;
+
+            const filter = { classId, userEmail };
+            const updateDoc = {
+                $set: {
+                    feedback: {
+                        ...feedback,
+                    },
+                },
+            };
+
+            const result = await enrollmentsCollection.updateOne(filter, updateDoc);
+            res.send(result);
+        });
+
         // DELETE a class
-        app.delete('/classes/:id', verifyFirebaseToken, async (req, res) => {
+        app.delete('/classes/:id', verifyFirebaseToken, verifyTeacher, async (req, res) => {
             const id = req.params.id;
             const result = await classesCollection.deleteOne({ _id: new ObjectId(id) });
             res.send(result);
