@@ -85,7 +85,7 @@ async function run() {
                 res.status(500).json({ message: 'Server error during role verification' });
             }
         };
-        // for checking teacher
+        // for checking teacher 
         const verifyTeacher = async (req, res, next) => {
             const userEmail = req.decoded?.email;
             if (!userEmail) {
