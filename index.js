@@ -16,7 +16,6 @@ app.use(express.json());
 
 // firebase service
 const decodedKey = Buffer.from(process.env.FB_Service, 'base64').toString('utf8');
-// const serviceAccount = require("./firebase-admin-key.json");
 const serviceAccount = JSON.parse(decodedKey);
 
 admin.initializeApp({
