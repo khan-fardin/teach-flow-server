@@ -138,7 +138,7 @@ async function run() {
             try {
                 const user = await usersCollection.findOne(
                     { email: email },
-                    { projection: { role: 1 } } // return only role field
+                    { projection: { role: 1 } } 
                 );
 
                 if (!user) {
