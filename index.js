@@ -711,8 +711,8 @@ async function run() {
             res.send(result);
         });
 
-        await client.db("admin").command({ ping: 1 })
-        console.log("Pinned the deployment.Mongo and server connected!")
+        // await client.db("admin").command({ ping: 1 })
+        // console.log("Pinned the deployment.Mongo and server connected!")
     } finally {
         // await client.close();
     }
