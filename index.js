@@ -114,7 +114,7 @@ async function run() {
 
             try {
                 const user = await usersCollection.findOne({
-                    email: { $regex: emailQuery, $options: 'i' }, // case-insensitive partial match
+                    email: { $regex: emailQuery, $options: 'i' }, 
                 });
 
                 if (!user) {
