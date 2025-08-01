@@ -11,7 +11,7 @@ This is the backend for **TeachFlow**, an educational web application where stud
 ---
 ## 📂 Repositories
 
-- **Frontend GitHub Repo:** []()
+- **Frontend GitHub Repo:** [https://github.com/khan-fardin/teach-flow-server](https://github.com/khan-fardin/teach-flow-server)
 
 ---
 
