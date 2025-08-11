@@ -2,10 +2,6 @@
 
 This is the backend for **TeachFlow**, an educational web application where students can enroll in courses, teachers can publish classes, and admins manage platform operations. The backend is built with **Express.js**, **MongoDB**, **JWT authentication**, and **Firebase Admin SDK**.
 
-## 🚀 Live API
-
-🔗 [https://ph-assignment12-server-three.vercel.app](https://ph-assignment12-server-three.vercel.app)
-
 > Deployed on **Vercel**
 
 ---
